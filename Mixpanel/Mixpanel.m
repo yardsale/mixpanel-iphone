@@ -1027,6 +1027,25 @@ static Mixpanel *sharedInstance = nil;
     });
 }
 
+- (void)identify:(NSString *)distinctId
+{
+    if (distinctId == nil || distinctId.length == 0) {
+        NSLog(@"%@ error blank distinct id: %@", self, distinctId);
+        return;
+    }
+    dispatch_async(self.mixpanel.serialQueue, ^{
+        self.distinctId = distinctId;
+    });
+}
+
+- (void)reset
+{
+    dispatch_async(self.mixpanel.serialQueue, ^{
+        self.distinctId = nil;
+        [self.unidentifiedQueue removeAllObjects];
+    });
+}
+
 - (void)addPushDeviceToken:(NSData *)deviceToken
 {
     const unsigned char *buffer = (const unsigned char *)[deviceToken bytes];

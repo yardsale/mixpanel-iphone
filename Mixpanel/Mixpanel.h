@@ -583,6 +583,9 @@
  */
 - (void)deleteUser;
 
+- (void)identify:(NSString *)distinctId;
+- (void)reset;
+
 @end
 
 /*!
