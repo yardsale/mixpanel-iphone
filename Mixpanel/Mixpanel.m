@@ -17,13 +17,23 @@
 // limitations under the License.
 
 #include <arpa/inet.h>
+#include <errno.h>
+#include <ifaddrs.h>
 #include <net/if.h>
 #include <net/if_dl.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/sysctl.h>
+#include <sys/types.h>
+#if ! defined(IFT_ETHER)
+#define IFT_ETHER 0x6/* Ethernet CSMACD */
+#endif
 
 #import <AdSupport/ASIdentifierManager.h>
 #import <CommonCrypto/CommonDigest.h>
+#import <CommonCrypto/CommonHMAC.h>
 #import <CoreTelephony/CTCarrier.h>
 #import <CoreTelephony/CTTelephonyNetworkInfo.h>
 #import <SystemConfiguration/SystemConfiguration.h>
@@ -348,6 +358,87 @@ static Mixpanel *sharedInstance = nil;
     return [b64String autorelease];
 }
 
+#pragma mark - Legacy distinct ID
+
++ (NSString*)calculateHMAC_SHA1withString:(NSString*) str andKey:(NSString*)key {
+	const char *cStr = [str UTF8String];
+	const char *cSecretStr = [key UTF8String];
+	unsigned char digest[CC_SHA1_DIGEST_LENGTH];
+	memset((void *)digest, 0x0, CC_SHA1_DIGEST_LENGTH);
+	CCHmac(kCCHmacAlgSHA1, cSecretStr, strlen(cSecretStr), cStr, strlen(cStr), digest);
+	return [NSString stringWithFormat:
+			@"%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X%02X",
+			digest[0],  digest[1],  digest[2],  digest[3],
+			digest[4],  digest[5],  digest[6],  digest[7],
+			digest[8],  digest[9],  digest[10], digest[11],
+			digest[12], digest[13], digest[14], digest[15],
+			digest[16], digest[17], digest[18], digest[19]
+			];
+}
+
+- (NSDictionary*)interfaces {
+    NSMutableDictionary *theDictionary = [NSMutableDictionary dictionary];
+
+
+    BOOL success;
+    struct ifaddrs * addrs;
+    const struct ifaddrs * cursor;
+    const struct sockaddr_dl * dlAddr;
+    const uint8_t * base;
+
+    success = getifaddrs(&addrs) == 0;
+    if (success)
+    {
+        cursor = addrs;
+        while (cursor != NULL)
+        {
+            if ( (cursor->ifa_addr->sa_family == AF_LINK) && (((const struct sockaddr_dl *)cursor->ifa_addr)->sdl_type == IFT_ETHER) )
+            {
+                //        fprintf(stderr, "%s:", cursor->ifa_name);
+                dlAddr = (const struct sockaddr_dl *)cursor->ifa_addr;
+                base = (const uint8_t *) &dlAddr->sdl_data[dlAddr->sdl_nlen];
+
+                NSString *theKey = [NSString stringWithUTF8String:cursor->ifa_name];
+                NSString *theValue = [NSString stringWithFormat:@"%02x:%02x:%02x:%02x:%02x:%02x", base[0], base[1], base[2], base[3], base[4], base[5]];
+                [theDictionary setObject:theValue forKey:theKey];
+            }
+
+            cursor = cursor->ifa_next;
+        }
+
+        freeifaddrs(addrs);
+    }
+
+    return(theDictionary);
+
+}
+
+- (NSString*)userIdentifier
+{
+    NSDictionary *dict = [self interfaces];
+    NSArray *keys = [dict allKeys];
+    keys = [keys  sortedArrayUsingSelector:@selector(caseInsensitiveCompare:)];
+
+    NSString *bundleName = [[[NSBundle mainBundle] infoDictionary] objectForKey:(id)kCFBundleNameKey];
+
+    /* while most apps will define CFBundleName, it's not guaranteed -- an app can choose to define it or not
+     so when it's missing, use the bundle file name */
+    if (bundleName == nil) {
+        bundleName = [[[NSBundle mainBundle] bundlePath] lastPathComponent];
+    }
+
+    NSMutableString *string = [NSMutableString stringWithString:bundleName];
+    for (NSString *key in keys) {
+        [string appendString:[dict objectForKey:key]];
+    }
+    return string;
+}
+
+- (NSString *)legacyDefaultDistinctId
+{
+    return [Mixpanel calculateHMAC_SHA1withString:[self userIdentifier] andKey:self.apiToken];
+}
+
 #pragma mark - Tracking
 
 + (void)assertPropertyTypes:(NSDictionary *)properties
@@ -394,17 +485,10 @@ static Mixpanel *sharedInstance = nil;
 
 - (NSString *)defaultDistinctId
 {
-    NSString *distinctId = nil;
-    if (NSClassFromString(@"ASIdentifierManager")) {
-        distinctId = [[ASIdentifierManager sharedManager].advertisingIdentifier UUIDString];
+    if ([[[UIDevice currentDevice] systemVersion] compare:@"7" options:NSNumericSearch] == NSOrderedAscending) {
+        return [self legacyDefaultDistinctId];
     }
-    if (!distinctId) {
-        distinctId = ODIN1();
-    }
-    if (!distinctId) {
-        NSLog(@"%@ error getting default distinct id: both iOS IFA and ODIN1 failed", self);
-    }
-    return distinctId;
+    return [[ASIdentifierManager sharedManager].advertisingIdentifier UUIDString];
 }
 
 - (void)track:(NSString *)event
