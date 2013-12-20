@@ -751,7 +751,7 @@ static Mixpanel *sharedInstance = nil;
 - (void)archive
 {
    // Must archive from the serial queue to avoid conflicts from data mutation
-   dispatch_sync(self.serialQueue, ^{
+   dispatch_async(self.serialQueue, ^{
       [self archiveFromSerialQueue];
    });
 }
